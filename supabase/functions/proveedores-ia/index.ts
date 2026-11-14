@@ -57,14 +57,24 @@ async function leerPagina(url: string): Promise<string> {
 
 const client = new Anthropic(); // usa ANTHROPIC_API_KEY
 
-async function pedirJSON(prompt: string): Promise<unknown> {
-  // Haiku 5.5: el modelo más barato (USD 0,10 / 0,50 por millón de tokens)
-  const res = await client.messages.create({
-    model: "claude-haiku-5-5",
-    max_tokens: 16000,
-    output_config: { effort: "medium" },
-    messages: [{ role: "user", content: prompt }],
-  } as any);
+// "barato": Haiku 5.5 para leer páginas y textos (menos de un centavo por lectura).
+// "mejor": Opus 5.5 para buscar productos ganadores (unos centavos por búsqueda).
+async function pedirJSON(prompt: string, modelo: "barato" | "mejor" = "barato"): Promise<unknown> {
+  const res = modelo === "mejor"
+    ? await client.beta.messages.create({
+        model: "claude-opus-5-5",
+        max_tokens: 16000,
+        output_config: { effort: "medium" },
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        messages: [{ role: "user", content: prompt }],
+      } as any)
+    : await client.messages.create({
+        model: "claude-haiku-5-5",
+        max_tokens: 16000,
+        output_config: { effort: "medium" },
+        messages: [{ role: "user", content: prompt }],
+      } as any);
   if (res.stop_reason === "refusal") throw new Error("Claude no pudo procesar este contenido.");
   const texto = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
   const limpio = texto.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
@@ -120,7 +130,7 @@ Deno.serve(async (req) => {
       return json(await pedirJSON(promptExtraer(texto, String(body.url || ""), cat)));
     }
     if (body.accion === "ganadores") {
-      return json(await pedirJSON(await promptGanadores(String(body.foco || "").slice(0, 300), cat)));
+      return json(await pedirJSON(await promptGanadores(String(body.foco || "").slice(0, 300), cat), "mejor"));
     }
     return json({ error: "Acción desconocida" }, 400);
   } catch (e) {
