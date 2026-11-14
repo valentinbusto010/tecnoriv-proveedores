@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Proveedores Tecno Riv</title>
+<meta name="description" content="Comparar proveedores, buscar productos ganadores y armar pedidos para Tecno Riv.">
+<meta name="theme-color" content="#0E1630">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Proveedores">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Montserrat:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="row between">
+      <div class="eyebrow">Tecno Riv · Compras</div>
+      <div class="row small" id="sesion" hidden><span class="muted" id="sesionEmail"></span><button type="button" class="ghost" data-act="salir">Salir</button></div>
+    </div>
+    <h1>Comprar mejor,<br><span class="acc">vender con margen</span></h1>
+    <p class="lead">Cargá tus proveedores y sus páginas, compará precio, envío, demora y reseñas, encontrá productos ganadores y armá el pedido en un solo lugar.</p>
+  </header>
+
+  <form class="card login" id="login" hidden>
+    <h2 id="loginTitulo">Entrar</h2>
+    <p class="sub" id="loginSub">Entrá con tu cuenta de Tecno Riv.</p>
+    <label class="f">Email<input id="lg-email" type="email" autocomplete="username" required></label>
+    <label class="f">Contraseña<input id="lg-pass" type="password" autocomplete="current-password" minlength="8" required></label>
+    <div id="lg-msg" class="small" role="status"></div>
+    <div class="row"><button type="submit" class="primary" id="lg-btn">Entrar</button><button type="button" class="ghost" data-act="modo-login" id="lg-modo">Crear cuenta</button></div>
+  </form>
+
+  <div id="app" hidden>
+    <nav class="tabs" aria-label="Secciones">
+      <a href="#resumen" data-tab="resumen">Resumen</a>
+      <a href="#proveedores" data-tab="proveedores">Proveedores <span class="n" id="nProv">0</span></a>
+      <a href="#comparar" data-tab="comparar">Comparar <span class="n" id="nOfe">0</span></a>
+      <a href="#ganadores" data-tab="ganadores">Ganadores</a>
+      <a href="#pedido" data-tab="pedido">Pedido <span class="n" id="nCart">0</span></a>
+    </nav>
+    <div id="estado" hidden></div>
+    <section class="view" id="v-resumen"></section>
+    <section class="view" id="v-proveedores" hidden></section>
+    <section class="view" id="v-comparar" hidden></section>
+    <section class="view" id="v-ganadores" hidden></section>
+    <section class="view" id="v-pedido" hidden></section>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
