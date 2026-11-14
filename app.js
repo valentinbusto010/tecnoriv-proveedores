@@ -544,15 +544,20 @@ async function importarSitio(url, destId) {
   detenerSitio = false;
   S.importe = { url, sitio: true, destId, cargando: 'Buscando todos los productos del sitio...' }; render();
   try {
-    const mapa = await ia({ accion: 'sitio_mapa', url });
+    const mapa = await ia({ accion: 'sitio_mapa', url, soloTecno: !S.leerTodo });
     let urls = mapa.urls || [];
+    const info = ia({ accion: 'leer', url: new URL(url).origin }).then(r => r?.proveedor || null).catch(() => null); // envío, mínimo, etc.
+    if (Array.isArray(mapa.productos) && mapa.productos.length) {
+      // Proveedor con lector especial (su catálogo público): ya vienen todos los productos, sin recorrer páginas
+      const productos = mapa.productos.filter(p => !BULTOS.test(norm(p.nombre).replace(/\s+/g, '-')));
+      return terminarSitio(url, destId, productos, [], null, info);
+    }
     if (urls.length < 3) { S.importe = null; return importar({ accion: 'leer', url }, url); } // sitio sin mapa: una sola página con Claude
     const total = urls.length;
     const slug = (u) => decodeURIComponent(u.split('?')[0].split('/').filter(Boolean).pop() || '');
     urls = urls.filter(u => !BULTOS.test(slug(u)));
     if (!S.leerTodo) urls = urls.filter(u => RUBRO_TECNO.test(slug(u)));
     if (!urls.length) throw new Error('No encontré productos de tecnología en este sitio. Probá marcando “Leer también lo que no es tecnología”.');
-    const info = ia({ accion: 'leer', url: new URL(url).origin }).then(r => r?.proveedor || null).catch(() => null); // envío, mínimo, etc.
     const productos = [], fallidos = [];
     const TANDA = 30;
     for (let i = 0; i < urls.length && !detenerSitio; i += TANDA) {
@@ -565,13 +570,21 @@ async function importarSitio(url, destId) {
       const r = await ia({ accion: 'sitio_productos', urls: fallidos.slice(0, 60) });
       productos.push(...r.productos); fallidos.splice(0, fallidos.length, ...r.fallidos, ...fallidos.slice(60));
     }
+    return terminarSitio(url, destId, productos, fallidos, S.leerTodo ? null : urls.length, info, detenerSitio ? urls.length - productos.length - fallidos.length : 0);
+  } catch (e) {
+    S.importe = { url, sitio: true, error: e.message };
+  }
+  render();
+}
+async function terminarSitio(url, destId, productos, fallidos, total, info, sinLeer = 0) {
+  try {
     if (!productos.length) throw new Error('No pude leer precios en este sitio. Probá pegando la lista de precios abajo.');
-    S.importe = { ...S.importe, cargando: 'Claude está buscando cuáles son iguales a los de tu catálogo...', progreso: 0.99 }; render();
+    S.importe = { ...S.importe, cargando: `Claude está buscando cuáles de los ${productos.length} productos son iguales a los de tu catálogo...`, progreso: 0.99 }; render();
     let pares = {};
     try { pares = await ia({ accion: 'emparejar', nombres: productos.map(p => p.nombre) }) || {}; } catch (e) { pares = {}; }
     productos.forEach((p, i) => { const ref = pares[String(i)]; p.ref = ref && catByName(ref) ? catByName(ref).nombre : ''; });
     productos.sort((a, b) => (b.ref ? 1 : 0) - (a.ref ? 1 : 0) || a.nombre.localeCompare(b.nombre));
-    S.importe = { url, sitio: true, destId, res: { sitio: true, productos, proveedor: await info, total: S.leerTodo ? null : urls.length, noLeidos: fallidos.length + (detenerSitio ? urls.length - productos.length - fallidos.length : 0) } };
+    S.importe = { url, sitio: true, destId, res: { sitio: true, productos, proveedor: await info, total, noLeidos: fallidos.length + sinLeer } };
   } catch (e) {
     S.importe = { url, sitio: true, error: e.message };
   }

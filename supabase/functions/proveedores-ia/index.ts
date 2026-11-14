@@ -100,6 +100,37 @@ async function mapaDelSitio(url: string) {
   return { urls: prod.slice(0, 2000), totalSitemap: todas.length };
 }
 
+/* ---------- Lectores especiales para webs que arman los productos con JavaScript (sin sitemap) ----------
+   Usan el catálogo público que la propia web del proveedor consulta para mostrar precios a cualquier visitante. */
+async function catalogoBraja(url: string, soloTecno: boolean) {
+  const api = "https://api.brajamayorista.com";
+  const tienda = new URL(url).pathname.match(/\/tienda\/([^/?#]+)/)?.[1] || "centro";
+  const productos: any[] = [];
+  let pagina = 1, paginas = 1;
+  do {
+    const q = new URLSearchParams({ page: String(pagina), pageSize: "50" });
+    if (soloTecno) q.set("categoriaIds", "9"); // 9 = ELECTRONICA Y ACCESORIOS (auriculares, parlantes, cargadores y cables, computación, consolas...)
+    const txt = await bajar(`${api}/catalog/tienda/${encodeURIComponent(tienda)}/products?${q}`, 25000);
+    if (!txt) break;
+    const j = JSON.parse(txt);
+    const meta = j?.meta || j?.pagination || j || {};
+    paginas = Math.min(Number(meta.totalPages) || 1, 60);
+    for (const p of j?.data || []) {
+      const precio = Number(p.precioOferta ?? p.precio);
+      if (!p.nombre || !(precio > 0)) continue;
+      const nombre = String(p.nombre).toLowerCase().replace(/(^|\s|\/|\()\S/g, (c: string) => c.toUpperCase()); // "AURICULAR BLUETOOTH A6S" -> "Auricular Bluetooth A6s"
+      productos.push({ url: `https://brajamayorista.com/tienda/${tienda}/productos/${p.id}`, nombre: nombre.slice(0, 200), precio, categoria: String(p.subcategoria?.nombre || p.categoria?.nombre || "").slice(0, 80), disponible: p.disponible == null ? null : Number(p.disponible) > 0 });
+    }
+    pagina++;
+  } while (pagina <= paginas);
+  return productos;
+}
+const LECTORES: Record<string, (url: string, soloTecno: boolean) => Promise<any[]>> = { "brajamayorista.com": catalogoBraja };
+function lectorPara(url: string) {
+  const host = new URL(url).hostname.replace(/^www\./, "");
+  return LECTORES[host] || null;
+}
+
 function buscarProductos(nodo: any, out: any[]) {
   if (!nodo || typeof nodo !== "object") return;
   if (Array.isArray(nodo)) { nodo.forEach((n) => buscarProductos(n, out)); return; }
@@ -230,7 +261,12 @@ Deno.serve(async (req) => {
   if (!Deno.env.get("ANTHROPIC_API_KEY")) return json({ error: "Falta cargar la clave de Anthropic (ANTHROPIC_API_KEY) en los secretos de Supabase." }, 500);
   try {
     const body = await req.json();
-    if (body.accion === "sitio_mapa") return json(await mapaDelSitio(String(body.url || "")));
+    if (body.accion === "sitio_mapa") {
+      const url = String(body.url || "");
+      const lector = lectorPara(url);
+      if (lector) return json({ productos: await lector(url, body.soloTecno !== false), urls: [] });
+      return json(await mapaDelSitio(url));
+    }
     if (body.accion === "sitio_productos") {
       const urls = (Array.isArray(body.urls) ? body.urls : []).map(String).filter((u: string) => /^https?:\/\//.test(u)).slice(0, 60);
       return json(await leerProductos(urls));
