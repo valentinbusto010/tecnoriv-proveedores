@@ -1,5 +1,6 @@
 // Función de Claude para la app de Proveedores de Tecno Riv.
-// Acciones: "leer" (abre la página de un proveedor), "texto" (analiza texto pegado), "ganadores".
+// Acciones: "sitio_mapa" + "sitio_productos" (catálogo completo de un sitio, sin Claude), "emparejar" (relaciona con el catálogo),
+// "leer" (una página con Claude), "texto" (texto pegado), "ganadores".
 // Necesita el secreto ANTHROPIC_API_KEY en Supabase (Edge Functions → Secrets).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import Anthropic from "npm:@anthropic-ai/sdk";
@@ -53,6 +54,116 @@ async function leerPagina(url: string): Promise<string> {
   const texto = htmlATexto(await r.text());
   if (texto.length < 80) throw new Error("La página no tiene texto legible (puede cargar los precios con JavaScript o pedir login). Copiá el texto y pegalo.");
   return texto;
+}
+
+/* ---------- Catálogo completo de un sitio (sin Claude: lee el sitemap y los datos de cada producto) ---------- */
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36";
+async function bajar(url: string, ms = 15000): Promise<string | null> {
+  try {
+    const r = await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "es-AR,es" }, redirect: "follow", signal: AbortSignal.timeout(ms) });
+    return r.ok ? await r.text() : null;
+  } catch { return null; }
+}
+const locs = (xml: string) => [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1].replace(/&amp;/g, "&"));
+
+async function mapaDelSitio(url: string) {
+  const base = new URL(url);
+  if (!/^https?:$/.test(base.protocol)) throw new Error("El link tiene que empezar con http o https");
+  const origen = base.origin;
+  const robots = (await bajar(origen + "/robots.txt")) || "";
+  const candidatos = [...robots.matchAll(/^\s*sitemap:\s*(\S+)/gim)].map((m) => m[1]);
+  candidatos.push(origen + "/sitemap.xml", origen + "/sitemap_index.xml", origen + "/sitemap_products_1.xml");
+  const urls = new Set<string>();
+  const vistos = new Set<string>();
+  const cola = [...new Set(candidatos)];
+  while (cola.length && vistos.size < 25) {
+    const sm = cola.shift()!;
+    if (vistos.has(sm)) continue;
+    vistos.add(sm);
+    const xml = await bajar(sm);
+    if (!xml || !/<(urlset|sitemapindex)/i.test(xml)) continue;
+    if (/<sitemapindex/i.test(xml)) {
+      // Primero los sitemaps de productos
+      const hijos = locs(xml).sort((a, b) => Number(/product|producto|item/i.test(b)) - Number(/product|producto|item/i.test(a)));
+      cola.push(...hijos);
+    } else for (const l of locs(xml)) { try { if (new URL(l).host === base.host) urls.add(l); } catch { /* ignora */ } }
+    if (urls.size > 0 && cola.length === 0) break;
+  }
+  const todas = [...urls];
+  // Páginas de producto: rutas con producto/product/item; si no hay, el grupo de rutas más grande con 2 niveles
+  let prod = todas.filter((u) => /\/(productos?|products?|p|item|articulo)\/[^/?#]+/i.test(new URL(u).pathname));
+  if (prod.length < 3) {
+    const grupos = new Map<string, string[]>();
+    for (const u of todas) { const seg = new URL(u).pathname.split("/").filter(Boolean); if (seg.length >= 2) { const k = seg[0]; grupos.set(k, [...(grupos.get(k) || []), u]); } }
+    prod = [...grupos.values()].sort((a, b) => b.length - a.length)[0] || [];
+  }
+  return { urls: prod.slice(0, 2000), totalSitemap: todas.length };
+}
+
+function buscarProductos(nodo: any, out: any[]) {
+  if (!nodo || typeof nodo !== "object") return;
+  if (Array.isArray(nodo)) { nodo.forEach((n) => buscarProductos(n, out)); return; }
+  const tipo = nodo["@type"];
+  const tipos = Array.isArray(tipo) ? tipo : [tipo];
+  if (tipos.includes("Product") || tipos.includes("ProductGroup")) out.push(nodo);
+  if (nodo["@graph"]) buscarProductos(nodo["@graph"], out);
+}
+// Ofertas de un producto; si es un grupo con variantes (colores, talles), las de todas sus variantes
+function ofertasDe(p: any): any[] {
+  const propias = Array.isArray(p.offers) ? p.offers : p.offers ? [p.offers] : [];
+  const variantes = Array.isArray(p.hasVariant) ? p.hasVariant : p.hasVariant ? [p.hasVariant] : [];
+  return [...propias, ...variantes.flatMap((v: any) => (Array.isArray(v?.offers) ? v.offers : v?.offers ? [v.offers] : []))]
+    .filter((x: any) => x && Number(String(x.price ?? x.lowPrice ?? "").replace(",", ".")) > 0);
+}
+function datosDeProducto(html: string, url: string) {
+  const prods: any[] = [];
+  for (const m of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try { buscarProductos(JSON.parse(m[1].trim()), prods); } catch { /* json roto */ }
+  }
+  const p = prods.find((x) => x.name && ofertasDe(x).length) || prods[0];
+  if (p) {
+    const ofertas = ofertasDe(p);
+    const conStock = ofertas.filter((x: any) => /InStock|LimitedAvailability|PreOrder/i.test(x.availability || ""));
+    const precios = (conStock.length ? conStock : ofertas).map((x: any) => Number(String(x.price ?? x.lowPrice).replace(",", ".")));
+    const precio = precios.length ? Math.min(...precios) : 0;
+    const disp = ofertas.filter((x: any) => x.availability);
+    const cat = typeof p.category === "string" ? p.category : p.category?.name || "";
+    if (p.name && precio > 0) {
+      return { url, nombre: String(p.name).slice(0, 200), precio, categoria: String(cat).split(/[>/]/).pop()!.trim().slice(0, 80), disponible: disp.length ? disp.some((x: any) => /InStock|LimitedAvailability|PreOrder/i.test(x.availability)) : null };
+    }
+  }
+  // Respaldo: etiquetas meta de precio
+  const meta = (prop: string) => html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]+content=["']([^"']+)`, "i"))?.[1];
+  const precio = Number(String(meta("product:price:amount") || meta("og:price:amount") || "").replace(",", "."));
+  const nombre = meta("og:title");
+  return nombre && precio > 0 ? { url, nombre: nombre.slice(0, 200), precio, categoria: "", disponible: null } : null;
+}
+// Lee de a 4 páginas a la vez (los sitios lentos cortan si se piden muchas juntas) y devuelve las que fallaron para reintentarlas
+async function leerProductos(urls: string[]) {
+  const res: any[] = [];
+  const fallidos: string[] = [];
+  let i = 0;
+  const trabajar = async () => {
+    while (i < urls.length) {
+      const u = urls[i++];
+      const html = await bajar(u, 25000);
+      const d = html ? datosDeProducto(html, u) : null;
+      if (d) res.push(d); else fallidos.push(u);
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, trabajar));
+  return { productos: res, fallidos };
+}
+function promptEmparejar(nombres: string[], cat: string) {
+  return `Tecno Riv es una tienda de accesorios tecnológicos. Abajo está su catálogo y una lista numerada de productos de un proveedor.
+Para cada producto del proveedor que sea EL MISMO producto que uno del catálogo de Tecno Riv (mismo tipo y mismo modelo; en fundas, el mismo modelo de iPhone; en cables, los mismos conectores), indicá el nombre EXACTO del catálogo. Si no hay uno igual, no lo incluyas. No adivines por parecido de categoría.
+Respondé SOLO con un objeto JSON {"<número>":"<nombre exacto del catálogo>"}. Si ninguno coincide, respondé {}.
+
+Catálogo de Tecno Riv (nombre | categoría | precio | costo | stock):
+${cat}
+
+Productos del proveedor:
+${nombres.map((n, i) => `${i}. ${n}`).join("\n")}`;
 }
 
 const client = new Anthropic(); // usa ANTHROPIC_API_KEY
@@ -119,7 +230,17 @@ Deno.serve(async (req) => {
   if (!Deno.env.get("ANTHROPIC_API_KEY")) return json({ error: "Falta cargar la clave de Anthropic (ANTHROPIC_API_KEY) en los secretos de Supabase." }, 500);
   try {
     const body = await req.json();
+    if (body.accion === "sitio_mapa") return json(await mapaDelSitio(String(body.url || "")));
+    if (body.accion === "sitio_productos") {
+      const urls = (Array.isArray(body.urls) ? body.urls : []).map(String).filter((u: string) => /^https?:\/\//.test(u)).slice(0, 60);
+      return json(await leerProductos(urls));
+    }
     const cat = await catalogo();
+    if (body.accion === "emparejar") {
+      const nombres = (Array.isArray(body.nombres) ? body.nombres : []).map((n: unknown) => String(n).slice(0, 160)).slice(0, 2500);
+      if (!nombres.length) return json({});
+      return json(await pedirJSON(promptEmparejar(nombres, cat)));
+    }
     if (body.accion === "leer") {
       const texto = await leerPagina(String(body.url || ""));
       return json(await pedirJSON(promptExtraer(texto, String(body.url), cat)));

@@ -115,3 +115,7 @@ textarea { min-height: 110px; resize: vertical; }
 .thinking::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate; flex: none; }
 @keyframes pulse { from { opacity: .3 } to { opacity: 1 } }
 @media (prefers-reduced-motion: reduce) { .thinking::before { animation: none; } }
+.barra { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.barra i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+@media (prefers-reduced-motion: reduce) { .barra i { transition: none; } }
+details > summary { list-style-position: inside; }

@@ -214,12 +214,44 @@ function formProv(p) {
   </form>`;
 }
 
+function vistaSitio(I) {
+  const r = I.res, prods = r.productos;
+  const conRef = prods.map((p, i) => ({ p, i })).filter(x => x.p.ref);
+  const sinStock = prods.filter(p => p.disponible === false).length;
+  const q = norm(I.filtro || '');
+  const otros = prods.map((p, i) => ({ p, i })).filter(x => !x.p.ref && (!q || norm(x.p.nombre).includes(q)));
+  const destSug = S.prov.find(p => { try { return new URL(/^https?:/.test(p.url) ? p.url : 'https://' + p.url).host === new URL(I.url).host; } catch (e) { return false; } });
+  const fila = ({ p, i }) => `<tr><td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.nombre)}</a>${p.disponible === false ? ' <span class="chip bad">Sin stock</span>' : ''}</td><td class="num">${money(p.precio)}</td>
+    <td><select id="imp-ref-${i}" aria-label="Producto de tu catálogo para ${esc(p.nombre)}"><option value="">— No está en mi catálogo —</option>${S.cat.map(c => `<option ${norm(c.nombre) === norm(p.ref) ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}</select></td>
+    <td class="num">${(() => { const c = catByName(p.ref); return c?.costo != null ? `<span class="chip ${p.precio < c.costo ? 'ok' : p.precio > c.costo ? 'bad' : 'line'}">tu costo ${money(c.costo)}</span>` : ''; })()}</td></tr>`;
+  return `<div class="stack">
+    <div class="facts">
+      <div><span>Productos leídos</span><b>${prods.length}${r.total ? ` de ${r.total}` : ''}</b></div>
+      <div><span>De tu catálogo</span><b>${conRef.length}</b></div>
+      <div><span>Sin stock</span><b>${sinStock}</b></div>
+      <div><span>Compra mínima</span><b>${r.proveedor?.minimo ? money(r.proveedor.minimo) : '—'}</b></div>
+      <div><span>Envío</span><b>${r.proveedor?.envio_costo != null ? money(r.proveedor.envio_costo) : '—'}</b></div>
+    </div>
+    ${r.noLeidos ? `<p class="note">${r.noLeidos} páginas no se pudieron leer (pueden no tener precio publicado).</p>` : ''}
+    <h3>Productos que también vendés (${conRef.length})</h3>
+    ${conRef.length ? `<div class="scroll"><table><thead><tr><th>Producto del proveedor</th><th class="num">Precio</th><th>Es de mi catálogo</th><th class="num">Comparado</th></tr></thead><tbody>${conRef.map(fila).join('')}</tbody></table></div>` : '<p class="small muted">Claude no encontró productos iguales a los de tu catálogo. Podés asociarlos a mano abajo.</p>'}
+    <details ${q ? 'open' : ''}><summary class="small" style="cursor:pointer"><b>Ver los otros ${prods.length - conRef.length} productos</b> y asociar alguno a mano</summary>
+      <div class="stack" style="margin-top:8px"><input id="imp-filtro" type="search" placeholder="Buscar entre los productos del proveedor..." value="${esc(I.filtro || '')}">
+      <div class="scroll"><table><thead><tr><th>Producto</th><th class="num">Precio</th><th>Es de mi catálogo</th><th></th></tr></thead><tbody>${otros.slice(0, 80).map(fila).join('')}</tbody></table></div>
+      ${otros.length > 80 ? `<p class="small muted">Mostrando 80 de ${otros.length}. Buscá para ver otros.</p>` : ''}</div></details>
+    <div class="row"><label class="f" style="flex:1 1 220px">Guardar en<select id="imp-dest"><option value="__nuevo">Proveedor nuevo: ${esc(r.proveedor?.nombre || new URL(I.url).hostname)}</option>${S.prov.map(p => `<option value="${p.id}" ${destSug?.id === p.id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}</select></label></div>
+    <div class="row"><button type="button" class="primary" data-act="imp-guardar-sitio" data-modo="todos">Guardar los ${prods.length} precios</button><button type="button" data-act="imp-guardar-sitio" data-modo="catalogo">Solo los de mi catálogo</button><button type="button" data-act="imp-cerrar">Descartar</button></div>
+    <p class="note">Al guardar se reemplazan los precios anteriores de ese proveedor por estos, así quedan siempre actualizados.</p>
+  </div>`;
+}
+
 function importador() {
   const I = S.importe;
   let cuerpo = '';
-  if (I?.cargando) cuerpo = `<p class="thinking">${esc(I.cargando)}</p>`;
+  if (I?.cargando) cuerpo = `<div class="stack"><p class="thinking">${esc(I.cargando)}</p>${I.progreso ? `<div class="barra" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(I.progreso * 100)}"><i style="width:${Math.round(I.progreso * 100)}%"></i></div>` : ''}${I.sitio ? '<div><button type="button" data-act="imp-detener">Detener</button></div>' : ''}</div>`;
   else if (I?.error) cuerpo = `<div class="banner bad"><span>${esc(I.error)}</span></div>`;
-  if (I?.res) {
+  if (I?.res?.sitio) cuerpo += vistaSitio(I);
+  else if (I?.res) {
     const r = I.res;
     cuerpo += `<div class="stack">
       <p class="sub">Revisá lo que encontré. Corregí o asociá cada producto a uno de tu catálogo antes de guardar.</p>
@@ -240,9 +272,10 @@ function importador() {
     </div>`;
   }
   return `<div class="card">
-    <h3>Cargar desde la página del proveedor</h3>
-    <p class="sub">Pegá el link y Claude lee la página, saca precios, envío y reseñas, y los asocia a tu catálogo. Si la página no se puede leer (por ejemplo, pide login), copiá el texto o la lista de precios y pegalo abajo.</p>
-    <div class="row"><input id="imp-url" type="url" style="flex:1 1 260px" placeholder="https://proveedor.com.ar/categoria/smartwatch" value="${esc(I?.url || '')}"><button type="button" class="primary" data-act="imp-leer" ${I?.cargando ? 'disabled' : ''}>Leer página</button></div>
+    <h3>Cargar el catálogo de un proveedor</h3>
+    <p class="sub">Pegá la dirección de su web. La app recorre todo el sitio, lee el precio de cada producto (no solo una página) y Claude marca cuáles son iguales a los tuyos. Si la web no deja leerse, copiá el texto o la lista de precios y pegalo abajo.</p>
+    <div class="row"><input id="imp-url" type="url" style="flex:1 1 260px" placeholder="https://proveedor.com.ar" value="${esc(I?.url || '')}"><button type="button" class="primary" data-act="imp-leer" ${I?.cargando ? 'disabled' : ''}>Leer catálogo completo</button></div>
+    <label class="checks small"><span style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="imp-todo" ${S.leerTodo ? 'checked' : ''}> Leer también lo que no es tecnología (bazar, juguetes, etc.). Tarda más.</span></label>
     <details ${I?.abrirTexto ? 'open' : ''}><summary class="small muted" style="cursor:pointer">O pegar el texto de la página o la lista de precios</summary>
       <div class="stack" style="margin-top:8px"><textarea id="imp-texto" placeholder="Pegá acá la lista de precios, el catálogo en texto o las reseñas...">${esc(I?.texto || '')}</textarea>
       <div><button type="button" data-act="imp-texto" ${I?.cargando ? 'disabled' : ''}>Analizar texto</button></div></div></details>
@@ -260,7 +293,8 @@ function renderProv() {
 }
 
 function cardProv(p) {
-  const ofs = S.ofe.filter(o => o.proveedor_id === p.id).sort((a, b) => refDe(a).localeCompare(refDe(b)));
+  const ofs = S.ofe.filter(o => o.proveedor_id === p.id).sort((a, b) => (b.ref ? 1 : 0) - (a.ref ? 1 : 0) || refDe(a).localeCompare(refDe(b)));
+  const deCat = ofs.filter(o => o.ref).length;
   const abierto = S.abierto === p.id;
   const href = p.url ? (/^https?:\/\//.test(p.url) ? p.url : 'https://' + p.url) : '';
   return `<article class="card">
@@ -274,9 +308,10 @@ function cardProv(p) {
     <div class="row small">${p.factura ? '<span class="chip ok">Factura</span>' : ''}${p.garantia ? '<span class="chip ok">Garantía</span>' : ''}${p.compre ? '<span class="chip ok">Ya compraste</span>' : ''}${p.pago ? `<span class="chip line">${esc(p.pago)}</span>` : ''}</div>
     ${href && /^https?:\/\//.test(href) ? `<a class="small" href="${esc(href)}" target="_blank" rel="noopener">${esc(p.url)}</a>` : ''}
     ${p.notas ? `<p class="small muted">${esc(p.notas)}</p>` : ''}
-    <div class="row"><button type="button" data-act="toggle-prov" data-id="${p.id}">${abierto ? 'Ocultar' : 'Ver'} productos (${ofs.length})</button><button type="button" class="ghost" data-act="edit-prov" data-id="${p.id}">Editar</button><button type="button" class="ghost danger" data-act="del-prov" data-id="${p.id}">Borrar</button></div>
+    ${ofs.length ? `<p class="small muted">${ofs.length} precios · ${deCat} de tu catálogo · actualizado el ${esc(ofs.map(o => o.actualizado).sort().pop())}</p>` : ''}
+    <div class="row"><button type="button" data-act="toggle-prov" data-id="${p.id}">${abierto ? 'Ocultar' : 'Ver'} productos (${ofs.length})</button>${href ? `<button type="button" data-act="actualizar-sitio" data-id="${p.id}" ${S.importe?.cargando ? 'disabled' : ''}>Actualizar precios de su web</button>` : ''}<button type="button" class="ghost" data-act="edit-prov" data-id="${p.id}">Editar</button><button type="button" class="ghost danger" data-act="del-prov" data-id="${p.id}">Borrar</button></div>
     ${abierto ? `<div class="stack">
-      ${ofs.length ? `<div class="scroll"><table><thead><tr><th>Producto</th><th class="num">Precio</th><th></th></tr></thead><tbody>${ofs.map(o => `<tr><td>${esc(o.nombre)}${o.ref && norm(o.ref) !== norm(o.nombre) ? `<div class="small muted">= ${esc(o.ref)}</div>` : ''}<div class="small muted">al ${esc(o.actualizado)}</div></td><td class="num">${money(o.precio)}</td><td class="num"><button type="button" class="ghost" data-act="add-cart" data-id="${o.id}" data-cant="1">+ Pedido</button><button type="button" class="ghost danger" data-act="del-ofe" data-id="${o.id}">Quitar</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="small muted">Sin productos cargados.</p>'}
+      ${ofs.length ? `<div class="scroll"><table><thead><tr><th>Producto</th><th class="num">Precio</th><th></th></tr></thead><tbody>${ofs.slice(0, 60).map(o => `<tr><td>${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.nombre)}</a>` : esc(o.nombre)}${o.disponible === false ? ' <span class="chip bad">Sin stock</span>' : ''}${o.ref ? `<div class="small muted">= ${esc(o.ref)}</div>` : ''}</td><td class="num">${money(o.precio)}</td><td class="num"><button type="button" class="ghost" data-act="add-cart" data-id="${o.id}" data-cant="1">+ Pedido</button><button type="button" class="ghost danger" data-act="del-ofe" data-id="${o.id}">Quitar</button></td></tr>`).join('')}</tbody></table></div>${ofs.length > 60 ? `<p class="small muted">Mostrando 60 de ${ofs.length} (primero los de tu catálogo). Para buscar uno en particular usá <a href="#comparar">Comparar</a>.</p>` : ''}` : '<p class="small muted">Sin productos cargados.</p>'}
       <form class="form" data-form="ofe" data-prov="${p.id}">
         <label class="f">Producto<input id="fo-nombre-${p.id}" required placeholder="Smartwatch D20"></label>
         <label class="f">Precio por unidad ($)<input id="fo-precio-${p.id}" required inputmode="numeric"></label>
@@ -288,12 +323,18 @@ function cardProv(p) {
 
 function renderComparar() {
   const q = norm(S.buscar);
-  const gs = grupos().filter(g => !q || norm(g.ref).includes(q) || g.ofertas.some(o => norm(o.nombre).includes(q)))
-    .sort((a, b) => b.ofertas.length - a.ofertas.length || a.ref.localeCompare(b.ref));
+  const filtro = S.filtroCmp || 'catalogo';
+  const todos = grupos();
+  const gsAll = todos.filter(g => !q || norm(g.ref).includes(q) || g.ofertas.some(o => norm(o.nombre).includes(q)))
+    .filter(g => q || filtro === 'todos' || (filtro === 'catalogo' ? !!catByName(g.ref) : g.ofertas.length > 1))
+    .sort((a, b) => b.ofertas.length - a.ofertas.length || (catByName(b.ref) ? 1 : 0) - (catByName(a.ref) ? 1 : 0) || a.ref.localeCompare(b.ref));
+  const gs = gsAll.slice(0, 50);
   return `
     <div class="row between"><h2>Comparar precios</h2>
       <div class="row"><input id="buscar" type="search" placeholder="Buscar producto..." value="${esc(S.buscar)}" style="width:220px">
+      <select id="filtroCmp" aria-label="Qué productos mostrar" style="width:auto">${[['catalogo', 'Los de mi catálogo'], ['varios', 'Con más de un proveedor'], ['todos', 'Todos']].map(([v, t]) => `<option value="${v}" ${filtro === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <label class="f" style="flex-direction:row;align-items:center;gap:8px">Unidades<input id="cantCmp" class="qty" type="number" min="1" value="${S.cant}"></label></div></div>
+    ${gsAll.length > gs.length ? `<p class="small muted">Mostrando ${gs.length} de ${gsAll.length} productos. Buscá por nombre para encontrar uno en particular.</p>` : ''}
     <p class="sub">Cada producto con todos los proveedores que lo tienen. En verde, la mejor opción combinando precio puesto, confianza y demora. Tocá o pasá el mouse por la confianza para ver de dónde sale.</p>
     ${gs.length ? gs.map(g => {
       const rows = ranking(g.ofertas, S.cant), c = catByName(g.ref);
@@ -409,6 +450,72 @@ async function importar(body, url) {
   }
   render();
 }
+/* Catálogo completo: recorre el sitemap, lee cada producto (de a tandas) y Claude marca los que son de tu catálogo.
+   Por defecto solo lee productos de tecnología, según las palabras de su dirección. */
+const RUBRO_TECNO = /auricular|headphone|headset|earbud|airpod|tws|parlante|speaker|smart-?watch|reloj|watch|malla|correa|cargador|cable|usb|tipo-c|type-c|lightning|magsafe|power-?bank|bateria-externa|funda|case|templado|hidrogel|protector-(de-)?pantalla|celular|iphone|samsung|xiaomi|motorola|soporte-(de-|para-)?(celular|auto|tablet|moto|bici)|holder|bluetooth|inalambric|mouse|teclado|gamer|joystick|consola|microfono|camara|webcam|tripode|selfie|aro-de-luz|ring-light|adaptador|hub|pendrive|memoria|micro-?sd|tablet|notebook|monitor|router|wifi|proyector|tv-box|radio|mixor|exxtra|noga|kanji|jbl|lenovo|redmi/i;
+const BULTOS = /(^|-)(bulto|bultos|pack|lote|combo)(-|$)|-x\d+-unidades/i; // bultos cerrados y packs: no, solo productos por unidad
+let detenerSitio = false;
+async function importarSitio(url, destId) {
+  if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+  detenerSitio = false;
+  S.importe = { url, sitio: true, destId, cargando: 'Buscando todos los productos del sitio...' }; render();
+  try {
+    const mapa = await ia({ accion: 'sitio_mapa', url });
+    let urls = mapa.urls || [];
+    if (urls.length < 3) { S.importe = null; return importar({ accion: 'leer', url }, url); } // sitio sin mapa: una sola página con Claude
+    const total = urls.length;
+    const slug = (u) => decodeURIComponent(u.split('?')[0].split('/').filter(Boolean).pop() || '');
+    urls = urls.filter(u => !BULTOS.test(slug(u)));
+    if (!S.leerTodo) urls = urls.filter(u => RUBRO_TECNO.test(slug(u)));
+    if (!urls.length) throw new Error('No encontré productos de tecnología en este sitio. Probá marcando “Leer también lo que no es tecnología”.');
+    const info = ia({ accion: 'leer', url: new URL(url).origin }).then(r => r?.proveedor || null).catch(() => null); // envío, mínimo, etc.
+    const productos = [], fallidos = [];
+    const TANDA = 30;
+    for (let i = 0; i < urls.length && !detenerSitio; i += TANDA) {
+      S.importe = { ...S.importe, cargando: `Leyendo productos: ${Math.min(i, urls.length)} de ${urls.length}${S.leerTodo ? '' : ` (de tecnología, sobre ${total} del sitio)`}`, progreso: i / urls.length }; render();
+      const r = await ia({ accion: 'sitio_productos', urls: urls.slice(i, i + TANDA) });
+      productos.push(...r.productos); fallidos.push(...r.fallidos);
+    }
+    if (fallidos.length && !detenerSitio) { // segundo intento para las que fallaron
+      S.importe = { ...S.importe, cargando: `Reintentando ${fallidos.length} productos...`, progreso: 0.97 }; render();
+      const r = await ia({ accion: 'sitio_productos', urls: fallidos.slice(0, 60) });
+      productos.push(...r.productos); fallidos.splice(0, fallidos.length, ...r.fallidos, ...fallidos.slice(60));
+    }
+    if (!productos.length) throw new Error('No pude leer precios en este sitio. Probá pegando la lista de precios abajo.');
+    S.importe = { ...S.importe, cargando: 'Claude está buscando cuáles son iguales a los de tu catálogo...', progreso: 0.99 }; render();
+    let pares = {};
+    try { pares = await ia({ accion: 'emparejar', nombres: productos.map(p => p.nombre) }) || {}; } catch (e) { pares = {}; }
+    productos.forEach((p, i) => { const ref = pares[String(i)]; p.ref = ref && catByName(ref) ? catByName(ref).nombre : ''; });
+    productos.sort((a, b) => (b.ref ? 1 : 0) - (a.ref ? 1 : 0) || a.nombre.localeCompare(b.nombre));
+    S.importe = { url, sitio: true, destId, res: { sitio: true, productos, proveedor: await info, total: S.leerTodo ? null : urls.length, noLeidos: fallidos.length + (detenerSitio ? urls.length - productos.length - fallidos.length : 0) } };
+  } catch (e) {
+    S.importe = { url, sitio: true, error: e.message };
+  }
+  render();
+}
+async function guardarSitio(modo, btn) {
+  const I = S.importe, r = I.res;
+  const filas = r.productos.map((p, i) => ({ ...p, ref: $('#imp-ref-' + i)?.value ?? p.ref })).filter(p => modo === 'todos' || p.ref);
+  if (!filas.length) { toast('No hay productos de tu catálogo para guardar'); return; }
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  let dest = $('#imp-dest').value;
+  if (dest === '__nuevo') {
+    const pv = r.proveedor || {};
+    dest = await guardar('prov_proveedores', null, { nombre: pv.nombre || new URL(I.url).hostname.replace('www.', ''), url: I.url, tipo: 'Mayorista web', ubicacion: pv.ubicacion || '', envio_costo: pv.envio_costo ?? null, dias_min: pv.dias_min ?? null, dias_max: pv.dias_max ?? null, minimo: pv.minimo ?? null, pago: pv.pago || '', resena_puntaje: pv.resena_puntaje ?? null, resena_cant: pv.resena_cant ?? null, factura: !!pv.factura, garantia: !!pv.garantia, notas: 'Catálogo leído de su web el ' + hoy() });
+    if (!dest) { btn.disabled = false; return; }
+  }
+  const { error: e1 } = await sb.from('prov_ofertas').delete().eq('proveedor_id', dest);
+  if (e1) { toast('No se pudieron reemplazar los precios: ' + e1.message); btn.disabled = false; return; }
+  const filasDb = filas.map(p => ({ proveedor_id: dest, nombre: p.nombre, ref: p.ref || '', precio: p.precio, categoria: catByName(p.ref)?.categoria || p.categoria || '', url: p.url, disponible: p.disponible }));
+  for (let i = 0; i < filasDb.length; i += 500) {
+    const { error } = await sb.from('prov_ofertas').insert(filasDb.slice(i, i + 500));
+    if (error) { toast('Se guardó una parte. Error: ' + error.message); break; }
+  }
+  toast(`${filas.length} precios guardados`);
+  S.importe = null; S.abierto = dest;
+  await cargar();
+}
+
 async function buscarGanadores(foco) {
   S.ganBusca = { foco, cargando: true }; render();
   try {
@@ -458,7 +565,10 @@ document.addEventListener('click', async (ev) => {
     toast(error ? 'No se pudo actualizar Gestión: ' + error.message : 'Stock y costos actualizados en Gestión');
     await cargar();
   }
-  else if (a === 'imp-leer') { const url = $('#imp-url').value.trim(); if (!url) { toast('Pegá un link primero'); return; } importar({ accion: 'leer', url: /^https?:\/\//.test(url) ? url : 'https://' + url }, url); }
+  else if (a === 'imp-leer') { const url = $('#imp-url').value.trim(); if (!url) { toast('Pegá un link primero'); return; } importarSitio(url); }
+  else if (a === 'imp-detener') { detenerSitio = true; b.disabled = true; b.textContent = 'Deteniendo...'; }
+  else if (a === 'imp-guardar-sitio') guardarSitio(b.dataset.modo, b);
+  else if (a === 'actualizar-sitio') { const p = provById(id); if (p?.url) { location.hash = 'proveedores'; importarSitio(p.url, p.id); window.scrollTo({ top: 0 }); } }
   else if (a === 'imp-texto') { const t = $('#imp-texto').value.trim(); if (!t) { toast('Pegá el texto primero'); return; } const url = $('#imp-url').value.trim(); importar({ accion: 'texto', texto: t.slice(0, 100000), url }, url); }
   else if (a === 'imp-cerrar') { S.importe = null; render(); }
   else if (a === 'imp-guardar') {
@@ -505,10 +615,14 @@ let tBus;
 document.addEventListener('input', (ev) => {
   const t = ev.target;
   if (t.id === 'buscar') { S.buscar = t.value; clearTimeout(tBus); tBus = setTimeout(render, 250); }
+  else if (t.id === 'imp-filtro' && S.importe) { S.importe.filtro = t.value; clearTimeout(tBus); tBus = setTimeout(render, 250); }
   else if (t.id === 'cantRes' || t.id === 'cantCmp') { S.cant = Math.max(1, parseInt(t.value) || 1); clearTimeout(tBus); tBus = setTimeout(render, 400); }
 });
 document.addEventListener('change', async (ev) => {
   const t = ev.target;
+  if (t.id === 'imp-todo') { S.leerTodo = t.checked; return; }
+  if (t.id === 'filtroCmp') { S.filtroCmp = t.value; render(); return; }
+  if (t.id?.startsWith('imp-ref-') && S.importe?.res?.sitio) { const p = S.importe.res.productos[Number(t.id.slice(8))]; if (p) p.ref = t.value; return; }
   if (t.dataset.cart) { const c = S.cart.find(x => x.ofertaId === t.dataset.cart); if (c) { c.cant = Math.max(1, parseInt(t.value) || 1); guardarCart(); render(); } }
   else if (t.dataset.ped) { const ok = await guardar('prov_pedidos', t.dataset.ped, { estado: t.value }); if (ok) { toast('Estado actualizado'); await cargar(); } }
 });
