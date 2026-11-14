@@ -58,12 +58,11 @@ async function leerPagina(url: string): Promise<string> {
 const client = new Anthropic(); // usa ANTHROPIC_API_KEY
 
 async function pedirJSON(prompt: string): Promise<unknown> {
-  const res = await client.beta.messages.create({
-    model: "claude-opus-5-5",
+  // Haiku 5.5: el modelo más barato (USD 0,10 / 0,50 por millón de tokens)
+  const res = await client.messages.create({
+    model: "claude-haiku-5-5",
     max_tokens: 16000,
     output_config: { effort: "medium" },
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
     messages: [{ role: "user", content: prompt }],
   } as any);
   if (res.stop_reason === "refusal") throw new Error("Claude no pudo procesar este contenido.");
