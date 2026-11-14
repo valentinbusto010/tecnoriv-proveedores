@@ -35,6 +35,28 @@ function dosPasos(btn, accion) {
 /* ---------- estado ---------- */
 const S = { prov: [], ofe: [], ped: [], gan: [], cat: [], cart: [], tab: 'resumen', editProv: null, abierto: null, buscar: '', cant: 5, importe: null, ganBusca: {}, confGestion: null, user: null, modoLogin: 'entrar' };
 try { S.cart = JSON.parse(localStorage.getItem('tr-prov-cart') || '[]') || []; } catch (e) { S.cart = []; }
+try { S.sel = JSON.parse(localStorage.getItem('tr-prov-sel') || '[]') || []; } catch (e) { S.sel = []; }
+const guardarSel = () => { try { localStorage.setItem('tr-prov-sel', JSON.stringify(S.sel)); } catch (e) {} };
+
+/* Secciones: agrupa productos parecidos aunque no sean el mismo modelo (todos los smartwatch, todos los parlantes...).
+   El orden importa: los accesorios van antes que el producto principal ("malla para smartwatch" es Mallas, no Smartwatch). */
+const SECCIONES = [
+  ['Mallas y correas', /malla|correa|pulsera para|strap/i],
+  ['Fundas y protectores', /funda|\bcase\b|templado|hidrogel|hydrogel|protector|film/i],
+  ['Smartwatch', /smart ?watch|reloj|watch|smart ?band|banda inteligente/i],
+  ['Auriculares de vincha', /headphone|vincha|over.?ear|on.?ear|headset|orejas de gato|\bp47\b/i],
+  ['Auriculares inalámbricos', /auricular|earbud|\btws\b|airpod|in.?ear|\bbuds\b|\bi\d{1,2}\b/i],
+  ['Parlantes', /parlante|speaker|barra de sonido|soundbar/i],
+  ['Power banks', /power ?bank|bater[ií]a (externa|port[aá]til)/i],
+  ['Cargadores', /cargador|cabezal|fuente de|magsafe|carga inal[aá]mbrica/i],
+  ['Cables y adaptadores', /cable|adaptador|lightning|tipo.?c|micro.?usb|\busb\b|\bhub\b|\botg\b/i],
+  ['Soportes y fotografía', /soporte|holder|tr[ií]pode|selfie|aro de luz|ring.?light|gimbal|estabilizador/i],
+  ['Gamer y computación', /mouse|teclado|joystick|gamepad|consola|gamer|monitor|webcam|notebook|tablet/i],
+  ['Memorias', /pendrive|memoria|micro ?sd|tarjeta sd/i],
+  ['Micrófonos y cámaras', /micr[oó]fono|c[aá]mara|lavalier/i],
+];
+const seccionDe = (nombre, categoria) => { const t = `${nombre} ${categoria || ''}`; return (SECCIONES.find(([, re]) => re.test(t)) || ['Otros'])[0]; };
+const mediana = (xs) => { const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length ? (s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2) : null; };
 const guardarCart = () => { try { localStorage.setItem('tr-prov-cart', JSON.stringify(S.cart)); } catch (e) {} };
 
 const provById = (id) => S.prov.find(p => p.id === id);
@@ -118,7 +140,7 @@ async function ia(body) {
 }
 
 /* ---------- navegación ---------- */
-const TABS = ['resumen', 'proveedores', 'comparar', 'ganadores', 'pedido'];
+const TABS = ['resumen', 'proveedores', 'comparar', 'secciones', 'ganadores', 'pedido'];
 function irA(tab) {
   S.tab = TABS.includes(tab) ? tab : 'resumen';
   for (const t of TABS) $('#v-' + t).hidden = t !== S.tab;
@@ -130,7 +152,9 @@ window.addEventListener('hashchange', () => irA(location.hash.slice(1)));
 function render() {
   if (!S.user) return;
   $('#nProv').textContent = S.prov.length; $('#nOfe').textContent = S.ofe.length; $('#nCart').textContent = S.cart.reduce((a, c) => a + (Number(c.cant) || 0), 0);
-  const v = { resumen: renderResumen, proveedores: renderProv, comparar: renderComparar, ganadores: renderGanadores, pedido: renderPedido }[S.tab];
+  S.sel = S.sel.filter(id => S.ofe.some(o => o.id === id) || !S.ofe.length);
+  $('#nSel').textContent = S.sel.length; $('#nSel').hidden = !S.sel.length;
+  const v = { resumen: renderResumen, proveedores: renderProv, comparar: renderComparar, secciones: renderSecciones, ganadores: renderGanadores, pedido: renderPedido }[S.tab];
   const el = $('#v-' + S.tab);
   const act = document.activeElement, foco = act?.id, sel = foco && act.selectionStart;
   el.innerHTML = v();
@@ -350,6 +374,66 @@ function renderComparar() {
     }).join('') : `<div class="empty">${S.ofe.length ? 'Nada coincide con la búsqueda.' : 'Cargá precios en Proveedores para comparar.'}</div>`}`;
 }
 
+/* ---------- Secciones: comparativa por rubro entre proveedores ---------- */
+function renderSecciones() {
+  const ofs = S.ofe.filter(o => provById(o.proveedor_id)).map(o => ({ ...o, sec: seccionDe(o.nombre, o.categoria) }));
+  const conteo = new Map();
+  for (const o of ofs) conteo.set(o.sec, (conteo.get(o.sec) || 0) + 1);
+  const nombres = [...conteo.keys()].sort((a, b) => (a === 'Otros') - (b === 'Otros') || conteo.get(b) - conteo.get(a));
+  if (!S.seccion || !conteo.has(S.seccion)) S.seccion = nombres[0];
+  const sec = S.seccion, enSec = ofs.filter(o => o.sec === sec);
+  const provs = [...new Set(enSec.map(o => o.proveedor_id))].map(provById);
+  const stats = provs.map(p => {
+    const precios = enSec.filter(o => o.proveedor_id === p.id && o.disponible !== false).map(o => Number(o.precio));
+    const todos = precios.length ? precios : enSec.filter(o => o.proveedor_id === p.id).map(o => Number(o.precio));
+    return { p, n: enSec.filter(o => o.proveedor_id === p.id).length, min: Math.min(...todos), med: mediana(todos), max: Math.max(...todos) };
+  }).sort((a, b) => a.med - b.med);
+  const mios = S.cat.filter(c => seccionDe(c.nombre, c.categoria) === sec);
+  const q = norm(S.secBuscar || ''), fp = S.secProv || '';
+  const lista = enSec.filter(o => (!fp || o.proveedor_id === fp) && (!q || norm(o.nombre).includes(q)) && (!S.secStock || o.disponible !== false))
+    .sort((a, b) => S.secOrden === 'caro' ? b.precio - a.precio : a.precio - b.precio);
+  const elegidos = S.sel.map(id => ofs.find(o => o.id === id)).filter(Boolean);
+
+  return `
+    <div class="stack"><h2>Comparar por secciones</h2>
+    <p class="sub">Agrupa los productos parecidos de todos tus proveedores aunque no sean el mismo modelo: todos los smartwatch, todos los parlantes, etc. Tildá “Comparar” en los que te interesen para verlos lado a lado abajo.</p></div>
+    ${nombres.length ? `
+    <div class="row" role="tablist" aria-label="Secciones">${nombres.map(n => `<button type="button" class="${n === sec ? 'primary' : ''}" data-act="seccion" data-sec="${esc(n)}" aria-pressed="${n === sec}">${esc(n)} <span class="chip line">${conteo.get(n)}</span></button>`).join('')}</div>
+
+    <div class="stack"><h3>${esc(sec)}: precios por proveedor</h3>
+    <div class="scroll"><table><thead><tr><th>Proveedor</th><th class="num">Productos</th><th class="num">Más barato</th><th class="num">Precio típico</th><th class="num">Más caro</th><th>Confianza</th></tr></thead><tbody>
+      ${stats.map((s, i) => `<tr class="${i === 0 && stats.length > 1 ? 'best' : ''}"><td><b>${esc(s.p.nombre)}</b>${i === 0 && stats.length > 1 ? ' <span class="chip ok">Más barato en general</span>' : ''}</td><td class="num">${s.n}</td><td class="num">${money(s.min)}</td><td class="num"><b>${money(s.med)}</b></td><td class="num">${money(s.max)}</td><td>${trustHTML(s.p)}</td></tr>`).join('')}
+      ${mios.length ? `<tr><td><b>Tu catálogo (Tecno Riv)</b><div class="small muted">lo que te cuesta hoy · lo vendés a</div></td><td class="num">${mios.length}</td><td class="num">${money(Math.min(...mios.map(c => c.costo ?? Infinity)))}</td><td class="num">${money(mediana(mios.filter(c => c.costo != null).map(c => c.costo)))}<div class="small muted">vendés a ${money(mediana(mios.map(c => c.precio)))}</div></td><td class="num">${money(Math.max(...mios.map(c => c.costo ?? 0)))}</td><td></td></tr>` : ''}
+    </tbody></table></div>
+    <p class="note">“Precio típico” es el del medio de la lista (la mitad de sus productos cuesta menos y la otra mitad más). Se calcula con los que tienen stock. Sirve para ver qué proveedor es más barato en el rubro aunque los modelos no sean iguales.</p></div>
+
+    <div class="stack"><h3>Productos de ${esc(sec)} (${lista.length})</h3>
+    <div class="row">
+      <input id="sec-buscar" type="search" placeholder="Buscar en ${esc(sec)}..." value="${esc(S.secBuscar || '')}" style="flex:1 1 200px">
+      <select id="sec-prov" aria-label="Proveedor" style="width:auto"><option value="">Todos los proveedores</option>${provs.map(p => `<option value="${p.id}" ${fp === p.id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}</select>
+      <select id="sec-orden" aria-label="Orden" style="width:auto"><option value="barato">Más barato primero</option><option value="caro" ${S.secOrden === 'caro' ? 'selected' : ''}>Más caro primero</option></select>
+      <label class="checks small"><span style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-stock" ${S.secStock ? 'checked' : ''}> Solo con stock</span></label>
+    </div>
+    <div class="scroll"><table><thead><tr><th>Comparar</th><th>Producto</th><th>Proveedor</th><th class="num">Precio</th><th></th></tr></thead><tbody>
+      ${lista.slice(0, 120).map(o => `<tr><td><input type="checkbox" data-sel="${o.id}" ${S.sel.includes(o.id) ? 'checked' : ''} aria-label="Comparar ${esc(o.nombre)}"></td>
+        <td>${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.nombre)}</a>` : esc(o.nombre)}${o.disponible === false ? ' <span class="chip bad">Sin stock</span>' : ''}${o.ref ? ` <span class="chip ok">Lo vendés</span>` : ''}</td>
+        <td>${esc(provById(o.proveedor_id).nombre)}</td><td class="num"><b>${money(o.precio)}</b></td>
+        <td class="num"><button type="button" class="ghost" data-act="add-cart" data-id="${o.id}" data-cant="1">+ Pedido</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nada coincide con el filtro.</td></tr>'}
+    </tbody></table></div>
+    ${lista.length > 120 ? `<p class="small muted">Mostrando 120 de ${lista.length}. Usá el buscador o el filtro de proveedor.</p>` : ''}</div>
+    ` : `<div class="empty">Todavía no hay productos de proveedores. Cargá el catálogo de uno en <a href="#proveedores">Proveedores</a>.</div>`}
+
+    <div class="stack" id="mi-comparacion"><div class="row between"><h2>Mi comparación (${elegidos.length})</h2>${elegidos.length ? '<button type="button" class="ghost danger" data-act="sel-limpiar">Vaciar</button>' : ''}</div>
+    ${elegidos.length ? `<div class="scroll"><table><thead><tr><th>Producto</th><th>Sección</th><th>Proveedor</th><th class="num">Precio</th><th class="num">Puesto x${S.cant}</th><th class="num">Demora</th><th>Confianza</th><th></th></tr></thead><tbody>
+      ${(() => { const minP = Math.min(...elegidos.map(o => puesto(o, S.cant))); return [...elegidos].sort((a, b) => a.precio - b.precio).map(o => { const p = provById(o.proveedor_id), cp = puesto(o, S.cant); return `<tr class="${cp === minP && elegidos.length > 1 ? 'best' : ''}">
+        <td>${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.nombre)}</a>` : esc(o.nombre)}${o.disponible === false ? ' <span class="chip bad">Sin stock</span>' : ''}${cp === minP && elegidos.length > 1 ? ' <span class="chip ok">Más barato</span>' : ''}</td>
+        <td class="small">${esc(o.sec)}</td><td>${esc(p.nombre)}</td><td class="num"><b>${money(o.precio)}</b></td><td class="num">${money(cp)}</td><td class="num">${diasTxt(p)}</td><td>${trustHTML(p)}</td>
+        <td class="num"><button type="button" class="ghost" data-act="add-cart" data-id="${o.id}" data-cant="${S.cant}">+ Pedido</button><button type="button" class="ghost danger" data-act="sel-quitar" data-id="${o.id}">Quitar</button></td></tr>`; }).join(''); })()}
+    </tbody></table></div>
+    <p class="note">El precio puesto suma el envío del proveedor repartido entre ${S.cant} unidades. Podés mezclar productos de distintas secciones y proveedores.</p>`
+    : '<div class="empty">Tildá “Comparar” en los productos que quieras poner lado a lado, de cualquier sección y proveedor.</div>'}</div>`;
+}
+
 function renderGanadores() {
   const G = S.ganBusca;
   return `
@@ -452,7 +536,7 @@ async function importar(body, url) {
 }
 /* Catálogo completo: recorre el sitemap, lee cada producto (de a tandas) y Claude marca los que son de tu catálogo.
    Por defecto solo lee productos de tecnología, según las palabras de su dirección. */
-const RUBRO_TECNO = /auricular|headphone|headset|earbud|airpod|tws|parlante|speaker|smart-?watch|reloj|watch|malla|correa|cargador|cable|usb|tipo-c|type-c|lightning|magsafe|power-?bank|bateria-externa|funda|case|templado|hidrogel|protector-(de-)?pantalla|celular|iphone|samsung|xiaomi|motorola|soporte-(de-|para-)?(celular|auto|tablet|moto|bici)|holder|bluetooth|inalambric|mouse|teclado|gamer|joystick|consola|microfono|camara|webcam|tripode|selfie|aro-de-luz|ring-light|adaptador|hub|pendrive|memoria|micro-?sd|tablet|notebook|monitor|router|wifi|proyector|tv-box|radio|mixor|exxtra|noga|kanji|jbl|lenovo|redmi/i;
+const RUBRO_TECNO = /auricular|headphone|headset|earbud|airpod|tws|parlante|speaker|smart-?watch|reloj|watch|malla|correa|cargador|cable|usb|tipo-c|type-c|lightning|magsafe|power-?bank|bateria-externa|funda|case|templado|hidrogel|protector-(de-)?pantalla|celular|iphone|samsung|xiaomi|motorola|soporte-(de-|para-)?(celular|auto|tablet|moto|bici)|holder|telefono|bluetooth|mouse|teclado|gamer|joystick|consola|microfono|camara|webcam|tripode|selfie|aro-de-luz|ring-light|adaptador|hub|pendrive|memoria|micro-?sd|tablet|notebook|monitor|router|wifi|tv-box|jbl|lenovo|redmi|(^|-)i\d{1,2}(-|$)|(^|-)p47(-|$)/i;
 const BULTOS = /(^|-)(bulto|bultos|pack|lote|combo)(-|$)|-x\d+-unidades/i; // bultos cerrados y packs: no, solo productos por unidad
 let detenerSitio = false;
 async function importarSitio(url, destId) {
@@ -566,6 +650,9 @@ document.addEventListener('click', async (ev) => {
     await cargar();
   }
   else if (a === 'imp-leer') { const url = $('#imp-url').value.trim(); if (!url) { toast('Pegá un link primero'); return; } importarSitio(url); }
+  else if (a === 'seccion') { S.seccion = b.dataset.sec; S.secBuscar = ''; S.secProv = ''; render(); }
+  else if (a === 'sel-quitar') { S.sel = S.sel.filter(x => x !== id); guardarSel(); render(); }
+  else if (a === 'sel-limpiar') dosPasos(b, () => { S.sel = []; guardarSel(); render(); });
   else if (a === 'imp-detener') { detenerSitio = true; b.disabled = true; b.textContent = 'Deteniendo...'; }
   else if (a === 'imp-guardar-sitio') guardarSitio(b.dataset.modo, b);
   else if (a === 'actualizar-sitio') { const p = provById(id); if (p?.url) { location.hash = 'proveedores'; importarSitio(p.url, p.id); window.scrollTo({ top: 0 }); } }
@@ -615,12 +702,17 @@ let tBus;
 document.addEventListener('input', (ev) => {
   const t = ev.target;
   if (t.id === 'buscar') { S.buscar = t.value; clearTimeout(tBus); tBus = setTimeout(render, 250); }
+  else if (t.id === 'sec-buscar') { S.secBuscar = t.value; clearTimeout(tBus); tBus = setTimeout(render, 250); }
   else if (t.id === 'imp-filtro' && S.importe) { S.importe.filtro = t.value; clearTimeout(tBus); tBus = setTimeout(render, 250); }
   else if (t.id === 'cantRes' || t.id === 'cantCmp') { S.cant = Math.max(1, parseInt(t.value) || 1); clearTimeout(tBus); tBus = setTimeout(render, 400); }
 });
 document.addEventListener('change', async (ev) => {
   const t = ev.target;
   if (t.id === 'imp-todo') { S.leerTodo = t.checked; return; }
+  if (t.dataset.sel) { const id = t.dataset.sel; S.sel = t.checked ? [...new Set([...S.sel, id])] : S.sel.filter(x => x !== id); guardarSel(); render(); if (t.checked) toast('Agregado a Mi comparación'); return; }
+  if (t.id === 'sec-prov') { S.secProv = t.value; render(); return; }
+  if (t.id === 'sec-orden') { S.secOrden = t.value; render(); return; }
+  if (t.id === 'sec-stock') { S.secStock = t.checked; render(); return; }
   if (t.id === 'filtroCmp') { S.filtroCmp = t.value; render(); return; }
   if (t.id?.startsWith('imp-ref-') && S.importe?.res?.sitio) { const p = S.importe.res.productos[Number(t.id.slice(8))]; if (p) p.ref = t.value; return; }
   if (t.dataset.cart) { const c = S.cart.find(x => x.ofertaId === t.dataset.cart); if (c) { c.cant = Math.max(1, parseInt(t.value) || 1); guardarCart(); render(); } }
