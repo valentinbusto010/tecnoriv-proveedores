@@ -564,6 +564,7 @@ async function importarSitio(url, destId) {
       S.importe = { ...S.importe, cargando: `Leyendo productos: ${Math.min(i, urls.length)} de ${urls.length}${S.leerTodo ? '' : ` (de tecnología, sobre ${total} del sitio)`}`, progreso: i / urls.length }; render();
       const r = await ia({ accion: 'sitio_productos', urls: urls.slice(i, i + TANDA) });
       productos.push(...r.productos); fallidos.push(...r.fallidos);
+      if (i === 0 && !productos.length && fallidos.length >= 10) break; // la primera tanda no tiene ningún precio: no seguir recorriendo
     }
     if (fallidos.length && !detenerSitio) { // segundo intento para las que fallaron
       S.importe = { ...S.importe, cargando: `Reintentando ${fallidos.length} productos...`, progreso: 0.97 }; render();
@@ -578,7 +579,7 @@ async function importarSitio(url, destId) {
 }
 async function terminarSitio(url, destId, productos, fallidos, total, info, sinLeer = 0) {
   try {
-    if (!productos.length) throw new Error('No pude leer precios en este sitio. Probá pegando la lista de precios abajo.');
+    if (!productos.length) throw new Error('Este proveedor no publica los precios: encontré sus productos, pero ninguno tiene precio a la vista. Muchos mayoristas los muestran solo a clientes que iniciaron sesión. Si tenés cuenta, entrá a su web desde tu navegador, abrí la lista de productos, copiá todo (Ctrl+A y Ctrl+C) y pegalo abajo en “pegar el texto”. También podés pedirle la lista de precios en Excel o PDF y pegarla.');
     S.importe = { ...S.importe, cargando: `Claude está buscando cuáles de los ${productos.length} productos son iguales a los de tu catálogo...`, progreso: 0.99 }; render();
     let pares = {};
     try { pares = await ia({ accion: 'emparejar', nombres: productos.map(p => p.nombre) }) || {}; } catch (e) { pares = {}; }

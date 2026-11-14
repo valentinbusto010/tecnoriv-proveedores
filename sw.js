@@ -1,5 +1,5 @@
 // Guarda la app para que abra rápido y sin conexión. Los datos siempre se piden en vivo a Supabase.
-const CACHE = 'proveedores-v4';
+const CACHE = 'proveedores-v5';
 const ARCHIVOS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
